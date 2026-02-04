@@ -1,5 +1,5 @@
 import { createPublicClient, createWalletClient, http, keccak256, encodeAbiParameters, parseAbiParameters, type Hex, type Address } from 'viem';
-import { baseSepolia } from 'viem/chains';
+import { baseSepolia, base } from 'viem/chains';
 import { privateKeyToAccount } from 'viem/accounts';
 
 // SwarmChallenge contract ABI (minimal)
@@ -103,7 +103,7 @@ const SWARM_CHALLENGE_ABI = [
 // Contract addresses
 const CONTRACTS: Record<'sepolia' | 'mainnet', Address> = {
   sepolia: '0xded4B58c1C4E5858098a70DfcF77B0b6a4c3aE0F' as Address,
-  mainnet: '0x0000000000000000000000000000000000000000' as Address, // TBD
+  mainnet: '0x70602b1c50058c27306cebef87fc12987fa770f5' as Address,
 };
 
 export interface ChallengeInfo {
@@ -131,7 +131,7 @@ export class SwarmChallengeClient {
   private contractAddress: Address;
 
   constructor(privateKey: Hex, network: 'sepolia' | 'mainnet' = 'sepolia') {
-    const chain = network === 'sepolia' ? baseSepolia : baseSepolia; // TODO: add mainnet
+    const chain = network === 'sepolia' ? baseSepolia : base;
     const rpcUrl = network === 'sepolia' 
       ? 'https://sepolia.base.org' 
       : 'https://mainnet.base.org';
