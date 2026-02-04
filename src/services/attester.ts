@@ -10,9 +10,9 @@ import type { SwarmVerification } from '../types';
 // EAS Contract on Base
 const EAS_ADDRESS = '0x4200000000000000000000000000000000000021';
 
-// Swarm Verification Schema (to be registered)
+// Swarm Verification Schema (registered on Base)
 // Schema: bytes32 swarmHash, uint64 timestamp, uint8 score, uint8 verdict, uint8 agentCount, string evidenceUri
-export const SWARM_SCHEMA_UID = '0x0000000000000000000000000000000000000000000000000000000000000000'; // TODO: Register
+export const SWARM_SCHEMA_UID = '0x8f43366d0b0c39dc7c3bf6c11cd76d97416d3e4759ed6d92880b3d4e28142097';
 
 const EAS_ABI = parseAbi([
   'function attest((bytes32 schema, (address recipient, uint64 expirationTime, bool revocable, bytes32 refUID, bytes data, uint256 value) data)) external payable returns (bytes32)',
