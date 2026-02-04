@@ -66,7 +66,7 @@ const server = Bun.serve({
       const startTime = Date.now();
       
       try {
-        const body = await req.json();
+        const body = await req.json() as { challengeId?: string; prompt?: string; nonce?: string; version?: string };
         const { challengeId, prompt, nonce, version } = body;
         
         if (!challengeId || !prompt || !nonce) {

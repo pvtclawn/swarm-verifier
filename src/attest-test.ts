@@ -16,6 +16,8 @@ if (!WALLET_PASSWORD) {
   process.exit(1);
 }
 
+const walletPassword: string = WALLET_PASSWORD;
+
 // Simple response generator (simulates LLM)
 async function selfChallenge(prompt: string): Promise<{ response: string; latencyMs: number }> {
   const startTime = Date.now();
@@ -100,7 +102,7 @@ async function main() {
   console.log(`Evidence: ${evidenceUri}`);
   
   console.log('\n⛓️  Attesting on Base...');
-  const attestation = await attestSwarm(verification, evidenceUri, WALLET_PASSWORD);
+  const attestation = await attestSwarm(verification, evidenceUri, walletPassword);
   
   console.log('\n✅ ATTESTATION COMPLETE!');
   console.log(`TX: https://basescan.org/tx/${attestation.txHash}`);

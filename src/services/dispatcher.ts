@@ -96,7 +96,7 @@ async function challengeAgent(
       const receivedAt = Date.now();
       
       if (response.ok) {
-        const data = await response.json();
+        const data = await response.json() as { response?: string; message?: string; content?: string; processingTime?: number };
         const responseText = data.response || data.message || data.content || JSON.stringify(data);
         
         return {
