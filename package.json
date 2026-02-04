@@ -7,6 +7,8 @@
     "dev": "bun run --watch src/index.ts",
     "server": "bun run src/server.ts",
     "challenge": "bun run src/commands/challenge.ts",
+    "demo": "bun run src/commands/demo-mainnet.ts",
+    "demo:dry": "bun run src/commands/demo-mainnet.ts --dry-run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
