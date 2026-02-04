@@ -200,6 +200,9 @@ async function main() {
   const challengeId = createReceipt.logs[0]?.topics[1] as Hex;
   console.log(`   ✅ Challenge ID: ${challengeId?.slice(0, 18)}...`);
   
+  // Wait a moment for chain state to settle
+  await new Promise(r => setTimeout(r, 2000));
+  
   // Get challenge info
   const challengeInfo = await publicClient.readContract({
     address: SWARM_CONTRACT,
@@ -208,13 +211,20 @@ async function main() {
     args: [challengeId],
   });
   
-  const commitDeadline = challengeInfo[2];
-  const revealDeadline = challengeInfo[3];
+  // Type assert the result properly
+  const [, , rawCommitDeadline, rawRevealDeadline] = challengeInfo as [Hex, bigint, bigint, bigint, Hex, boolean, number];
+  const commitDeadline = BigInt(rawCommitDeadline);
+  const revealDeadline = BigInt(rawRevealDeadline);
   const currentBlock = await publicClient.getBlockNumber();
   
   console.log(`   Current block: ${currentBlock}`);
   console.log(`   Commit deadline: ${commitDeadline}`);
   console.log(`   Reveal deadline: ${revealDeadline}\n`);
+  
+  if (commitDeadline === 0n) {
+    console.error('❌ Error: Failed to read challenge deadlines. Try again.');
+    process.exit(1);
+  }
   
   // Step 2: Commit (simulate 3 agents with same wallet)
   console.log('📝 Step 2: Committing answers (simulating 3 agents)...');
