@@ -2,16 +2,15 @@
  * Swarm Attester - On-chain attestation for verified swarms
  */
 
-import { createPublicClient, createWalletClient, http, encodeAbiParameters, parseAbiParameters, keccak256, toBytes } from 'viem';
-import { base } from 'viem/chains';
+import { execSync } from 'child_process';
+import { writeFileSync, existsSync } from 'fs';
+import { keccak256, toBytes } from 'viem';
 import type { SwarmVerification } from '../types';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-
-const execAsync = promisify(exec);
 
 // EAS Contract on Base
 const EAS_ADDRESS = '0x4200000000000000000000000000000000000021';
+const FOUNDRY_PATH = '/home/clawn/.foundry/bin';
+const W3_PATH = '/home/clawn/.npm-global/bin/w3';
 
 // Swarm Verification Schema (registered on Base)
 // Schema: bytes32 swarmHash, uint64 timestamp, uint8 score, uint8 verdict, uint8 agentCount, string evidenceUri
@@ -43,23 +42,6 @@ function encodeVerdict(verdict: 'genuine' | 'suspicious' | 'likely_fake'): numbe
 }
 
 /**
- * Encode attestation data for EAS
- */
-function encodeAttestationData(
-  swarmHash: `0x${string}`,
-  timestamp: bigint,
-  score: number,
-  verdict: number,
-  agentCount: number,
-  evidenceUri: string
-): `0x${string}` {
-  return encodeAbiParameters(
-    parseAbiParameters('bytes32, uint64, uint8, uint8, uint8, string'),
-    [swarmHash, timestamp, score, verdict, agentCount, evidenceUri]
-  );
-}
-
-/**
  * Attest a swarm verification on-chain using Foundry's cast
  */
 export async function attestSwarm(
@@ -68,12 +50,10 @@ export async function attestSwarm(
   walletPassword: string
 ): Promise<AttestationResult> {
   const swarmHash = hashSwarm(verification.agents.map(a => a.id));
-  const timestamp = BigInt(Math.floor(Date.now() / 1000));
+  const timestamp = Math.floor(Date.now() / 1000);
   const score = verification.overallScore;
   const verdict = encodeVerdict(verification.verdict);
   const agentCount = verification.agents.length;
-  
-  const data = encodeAttestationData(swarmHash, timestamp, score, verdict, agentCount, evidenceUri);
   
   console.log(`\n🏅 Swarm Attestation`);
   console.log(`===================`);
@@ -83,30 +63,31 @@ export async function attestSwarm(
   console.log(`Verdict: ${verification.verdict}`);
   console.log(`Evidence: ${evidenceUri}`);
   
-  // Build attestation request
-  // Schema: (bytes32 schema, (address recipient, uint64 expirationTime, bool revocable, bytes32 refUID, bytes data, uint256 value))
-  const attestationRequest = `(${SWARM_SCHEMA_UID},(0x0000000000000000000000000000000000000000,0,true,0x0000000000000000000000000000000000000000000000000000000000000000,${data},0))`;
-  
-  // Write password to temp file
   const pwFile = '/tmp/castpw_swarm';
-  await Bun.write(pwFile, walletPassword);
+  writeFileSync(pwFile, walletPassword);
   
   try {
-    const { stdout, stderr } = await execAsync(
-      `/home/clawn/.foundry/bin/cast send ${EAS_ADDRESS} "attest((bytes32,(address,uint64,bool,bytes32,bytes,uint256)))" "${attestationRequest}" --rpc-url https://mainnet.base.org --account clawn --password-file ${pwFile}`,
-      { timeout: 60000 }
-    );
+    // Step 1: Encode the data using cast abi-encode
+    const encodeCmd = `${FOUNDRY_PATH}/cast abi-encode "f(bytes32,uint64,uint8,uint8,uint8,string)" ${swarmHash} ${timestamp} ${score} ${verdict} ${agentCount} "${evidenceUri}"`;
+    const data = execSync(encodeCmd, { encoding: 'utf8', timeout: 10000 }).trim();
+    
+    // Step 2: Build attestation struct
+    const attestStruct = `(${SWARM_SCHEMA_UID},(0x0000000000000000000000000000000000000000,0,true,0x0000000000000000000000000000000000000000000000000000000000000000,${data},0))`;
+    
+    // Step 3: Send attestation
+    const sendCmd = `${FOUNDRY_PATH}/cast send ${EAS_ADDRESS} "attest((bytes32,(address,uint64,bool,bytes32,bytes,uint256)))(bytes32)" "${attestStruct}" --rpc-url https://mainnet.base.org --account clawn --password-file ${pwFile}`;
+    const result = execSync(sendCmd, { encoding: 'utf8', timeout: 60000 });
     
     // Parse tx hash from output
-    const txHashMatch = stdout.match(/transactionHash\s+(\S+)/);
-    const txHash = txHashMatch ? txHashMatch[1] : '';
+    const txMatch = result.match(/transactionHash\s+(\S+)/);
+    const txHash = txMatch?.[1] ?? 'unknown';
+    
+    // Parse attestation UID from logs
+    const uidMatch = result.match(/topics.*\[\"0x[^\"]+\",\"(0x[^\"]+)\"\]/);
+    const uid = uidMatch?.[1] ?? 'unknown';
     
     console.log(`✅ Attestation submitted!`);
-    console.log(`TX: ${txHash}`);
-    
-    // Get the UID from logs
-    const uidMatch = stdout.match(/topics.*\[\"0x[^\"]+\",\"(0x[^\"]+)\"\]/);
-    const uid = uidMatch ? uidMatch[1] : `pending_${verification.id}`;
+    console.log(`TX: https://basescan.org/tx/${txHash}`);
     
     return { uid, txHash };
     
@@ -115,9 +96,9 @@ export async function attestSwarm(
     throw error;
   } finally {
     // Clean up password file
-    try {
-      await Bun.write(pwFile, '');
-    } catch {}
+    if (existsSync(pwFile)) {
+      try { execSync(`rm ${pwFile}`); } catch {}
+    }
   }
 }
 
@@ -145,9 +126,9 @@ export async function uploadEvidence(verification: SwarmVerification): Promise<s
   await Bun.write(tempFile, JSON.stringify(evidence, null, 2));
   
   try {
-    const { stdout } = await execAsync(`w3 up ${tempFile} --json`, { timeout: 30000 });
-    const result = JSON.parse(stdout);
-    const cid = result.root?.['/']; 
+    const result = execSync(`${W3_PATH} up ${tempFile} --json`, { encoding: 'utf8', timeout: 30000 });
+    const parsed = JSON.parse(result);
+    const cid = parsed.root?.['/'];
     
     if (cid) {
       console.log(`📦 Evidence uploaded: ${cid}`);
@@ -155,7 +136,7 @@ export async function uploadEvidence(verification: SwarmVerification): Promise<s
     }
     
     // Fallback: try to extract CID from output
-    const cidMatch = stdout.match(/bafy[a-zA-Z0-9]+/);
+    const cidMatch = result.match(/bafy[a-zA-Z0-9]+/);
     if (cidMatch) {
       return `https://w3s.link/ipfs/${cidMatch[0]}`;
     }
