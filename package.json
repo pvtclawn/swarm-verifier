@@ -1,0 +1,19 @@
+{
+  "name": "swarm-verifier",
+  "version": "0.1.0",
+  "description": "Proof of Swarm - Verify agent networks are genuine AI, not humans farming",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "server": "bun run src/server.ts",
+    "challenge": "bun run src/commands/challenge.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "viem": "^2.29.2"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.8",
+    "typescript": "^5.9.3"
+  }
+}
