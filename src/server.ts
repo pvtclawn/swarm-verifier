@@ -11,6 +11,8 @@ import { analyzeSwarm, printVerificationSummary } from './services/analyzer';
 import { attestSwarm, uploadEvidence } from './services/attester';
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3403;
+const WALLET_PASSWORD = process.env.WALLET_PASSWORD || '';
+const ENABLE_ATTESTATION = process.env.ENABLE_ATTESTATION === 'true';
 
 // In-memory store for verifications
 const verifications = new Map<string, SwarmVerification>();
@@ -113,11 +115,16 @@ const server = Bun.serve({
         // Print summary
         printVerificationSummary(verification);
         
-        // Upload evidence and attest (if genuine)
+        // Upload evidence and attest (if genuine and attestation enabled)
         let attestation = null;
-        if (verification.verdict === 'genuine') {
-          const evidenceUri = await uploadEvidence(verification);
-          attestation = await attestSwarm(verification, evidenceUri);
+        if (verification.verdict === 'genuine' && ENABLE_ATTESTATION && WALLET_PASSWORD) {
+          try {
+            const evidenceUri = await uploadEvidence(verification);
+            attestation = await attestSwarm(verification, evidenceUri, WALLET_PASSWORD);
+          } catch (error) {
+            console.error('Attestation failed:', error);
+            // Continue without attestation
+          }
         }
         
         return jsonResponse({
@@ -162,6 +169,7 @@ console.log(`==========================`);
 console.log(`Listening on http://localhost:${PORT}`);
 console.log(`Operator: PrivateClawn (pvtclawn.base.eth)`);
 console.log(`Protocol: SVP v0.1`);
+console.log(`Attestation: ${ENABLE_ATTESTATION ? 'enabled' : 'disabled'}`);
 console.log(`\nEndpoints:`);
 console.log(`  GET  /health        - Health check`);
 console.log(`  GET  /stats         - Service statistics`);

@@ -2,10 +2,13 @@
  * Swarm Attester - On-chain attestation for verified swarms
  */
 
-import { createPublicClient, createWalletClient, http, parseAbi } from 'viem';
+import { createPublicClient, createWalletClient, http, encodeAbiParameters, parseAbiParameters, keccak256, toBytes } from 'viem';
 import { base } from 'viem/chains';
-import { privateKeyToAccount } from 'viem/accounts';
 import type { SwarmVerification } from '../types';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 
 // EAS Contract on Base
 const EAS_ADDRESS = '0x4200000000000000000000000000000000000021';
@@ -14,24 +17,18 @@ const EAS_ADDRESS = '0x4200000000000000000000000000000000000021';
 // Schema: bytes32 swarmHash, uint64 timestamp, uint8 score, uint8 verdict, uint8 agentCount, string evidenceUri
 export const SWARM_SCHEMA_UID = '0x8f43366d0b0c39dc7c3bf6c11cd76d97416d3e4759ed6d92880b3d4e28142097';
 
-const EAS_ABI = parseAbi([
-  'function attest((bytes32 schema, (address recipient, uint64 expirationTime, bool revocable, bytes32 refUID, bytes data, uint256 value) data)) external payable returns (bytes32)',
-]);
-
 interface AttestationResult {
   uid: string;
   txHash: string;
 }
 
 /**
- * Hash the swarm (sorted agent IDs)
+ * Hash the swarm (sorted agent IDs) using keccak256
  */
 function hashSwarm(agentIds: string[]): `0x${string}` {
   const sorted = [...agentIds].sort();
   const combined = sorted.join(',');
-  // Simple hash for now - in production use keccak256
-  const hash = Buffer.from(combined).toString('hex').padStart(64, '0').slice(0, 64);
-  return `0x${hash}`;
+  return keccak256(toBytes(combined));
 }
 
 /**
@@ -46,60 +43,128 @@ function encodeVerdict(verdict: 'genuine' | 'suspicious' | 'likely_fake'): numbe
 }
 
 /**
- * Encode attestation data
+ * Encode attestation data for EAS
  */
 function encodeAttestationData(
   swarmHash: `0x${string}`,
-  timestamp: number,
+  timestamp: bigint,
   score: number,
   verdict: number,
   agentCount: number,
   evidenceUri: string
 ): `0x${string}` {
-  // ABI encode: bytes32, uint64, uint8, uint8, uint8, string
-  // For simplicity, pack into hex
-  const timestampHex = timestamp.toString(16).padStart(16, '0');
-  const scoreHex = score.toString(16).padStart(2, '0');
-  const verdictHex = verdict.toString(16).padStart(2, '0');
-  const countHex = agentCount.toString(16).padStart(2, '0');
-  
-  // This is simplified - in production use proper ABI encoding
-  return `${swarmHash}${timestampHex}${scoreHex}${verdictHex}${countHex}` as `0x${string}`;
+  return encodeAbiParameters(
+    parseAbiParameters('bytes32, uint64, uint8, uint8, uint8, string'),
+    [swarmHash, timestamp, score, verdict, agentCount, evidenceUri]
+  );
 }
 
 /**
- * Attest a swarm verification on-chain
+ * Attest a swarm verification on-chain using Foundry's cast
  */
 export async function attestSwarm(
   verification: SwarmVerification,
-  evidenceUri: string
+  evidenceUri: string,
+  walletPassword: string
 ): Promise<AttestationResult> {
-  // For now, just log what we would attest
-  console.log(`\n🏅 Swarm Attestation (dry run)`);
-  console.log(`==============================`);
+  const swarmHash = hashSwarm(verification.agents.map(a => a.id));
+  const timestamp = BigInt(Math.floor(Date.now() / 1000));
+  const score = verification.overallScore;
+  const verdict = encodeVerdict(verification.verdict);
+  const agentCount = verification.agents.length;
+  
+  const data = encodeAttestationData(swarmHash, timestamp, score, verdict, agentCount, evidenceUri);
+  
+  console.log(`\n🏅 Swarm Attestation`);
+  console.log(`===================`);
   console.log(`Verification ID: ${verification.id}`);
-  console.log(`Agents: ${verification.agents.length}`);
-  console.log(`Score: ${verification.overallScore}`);
+  console.log(`Swarm Hash: ${swarmHash}`);
+  console.log(`Score: ${score}`);
   console.log(`Verdict: ${verification.verdict}`);
   console.log(`Evidence: ${evidenceUri}`);
   
-  const swarmHash = hashSwarm(verification.agents.map(a => a.id));
-  console.log(`Swarm Hash: ${swarmHash}`);
+  // Build attestation request
+  // Schema: (bytes32 schema, (address recipient, uint64 expirationTime, bool revocable, bytes32 refUID, bytes data, uint256 value))
+  const attestationRequest = `(${SWARM_SCHEMA_UID},(0x0000000000000000000000000000000000000000,0,true,0x0000000000000000000000000000000000000000000000000000000000000000,${data},0))`;
   
-  // TODO: Actually submit to EAS when schema is registered
-  // For now, return mock result
-  return {
-    uid: `mock_${verification.id}`,
-    txHash: `0x${'0'.repeat(64)}`,
-  };
+  // Write password to temp file
+  const pwFile = '/tmp/castpw_swarm';
+  await Bun.write(pwFile, walletPassword);
+  
+  try {
+    const { stdout, stderr } = await execAsync(
+      `/home/clawn/.foundry/bin/cast send ${EAS_ADDRESS} "attest((bytes32,(address,uint64,bool,bytes32,bytes,uint256)))" "${attestationRequest}" --rpc-url https://mainnet.base.org --account clawn --password-file ${pwFile}`,
+      { timeout: 60000 }
+    );
+    
+    // Parse tx hash from output
+    const txHashMatch = stdout.match(/transactionHash\s+(\S+)/);
+    const txHash = txHashMatch ? txHashMatch[1] : '';
+    
+    console.log(`✅ Attestation submitted!`);
+    console.log(`TX: ${txHash}`);
+    
+    // Get the UID from logs
+    const uidMatch = stdout.match(/topics.*\[\"0x[^\"]+\",\"(0x[^\"]+)\"\]/);
+    const uid = uidMatch ? uidMatch[1] : `pending_${verification.id}`;
+    
+    return { uid, txHash };
+    
+  } catch (error) {
+    console.error('Attestation failed:', error);
+    throw error;
+  } finally {
+    // Clean up password file
+    try {
+      await Bun.write(pwFile, '');
+    } catch {}
+  }
 }
 
 /**
- * Upload verification evidence to IPFS
+ * Upload verification evidence to IPFS via w3 CLI
  */
 export async function uploadEvidence(verification: SwarmVerification): Promise<string> {
-  // For now, return mock URI
-  // In production, upload to web3.storage
-  const mockCid = `bafybeig${verification.id.replace(/[^a-z0-9]/g, '')}`;
-  return `https://w3s.link/ipfs/${mockCid}`;
+  const evidence = {
+    version: '0.1',
+    verificationId: verification.id,
+    timestamp: new Date().toISOString(),
+    agents: verification.agents.map(a => ({ id: a.id, name: a.name })),
+    scores: verification.scores,
+    overallScore: verification.overallScore,
+    verdict: verification.verdict,
+    responses: verification.responses?.map(r => ({
+      agentId: r.agentId,
+      latencyMs: r.latencyMs,
+      hasError: !!r.error,
+    })),
+  };
+  
+  // Write to temp file
+  const tempFile = `/tmp/swarm_evidence_${verification.id}.json`;
+  await Bun.write(tempFile, JSON.stringify(evidence, null, 2));
+  
+  try {
+    const { stdout } = await execAsync(`w3 up ${tempFile} --json`, { timeout: 30000 });
+    const result = JSON.parse(stdout);
+    const cid = result.root?.['/']; 
+    
+    if (cid) {
+      console.log(`📦 Evidence uploaded: ${cid}`);
+      return `https://w3s.link/ipfs/${cid}`;
+    }
+    
+    // Fallback: try to extract CID from output
+    const cidMatch = stdout.match(/bafy[a-zA-Z0-9]+/);
+    if (cidMatch) {
+      return `https://w3s.link/ipfs/${cidMatch[0]}`;
+    }
+    
+    throw new Error('Failed to get CID from w3 output');
+    
+  } catch (error) {
+    console.error('IPFS upload failed:', error);
+    // Return mock URI as fallback
+    return `ipfs://evidence/${verification.id}`;
+  }
 }
