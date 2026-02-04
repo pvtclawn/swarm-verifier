@@ -1,11 +1,14 @@
 /**
  * Swarm Verifier API Server
+ * 
+ * Public API for swarm verification.
  */
 
 import type { Agent, ChallengeRequest, SwarmVerification } from './types';
 import { generateChallenge } from './services/challenger';
 import { dispatchChallenge } from './services/dispatcher';
 import { analyzeSwarm, printVerificationSummary } from './services/analyzer';
+import { attestSwarm, uploadEvidence } from './services/attester';
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3403;
 
@@ -47,11 +50,30 @@ const server = Bun.serve({
         status: 'ok',
         service: 'Proof of Swarm Verifier',
         version: '0.1.0',
+        operator: 'PrivateClawn (pvtclawn.base.eth)',
         description: 'Verify agent networks are genuine AI, not humans farming',
+        protocol: 'SVP v0.1',
         endpoints: {
           'POST /verify': 'Submit agents for swarm verification',
           'GET /result/:id': 'Get verification result',
+          'GET /stats': 'Service statistics',
         },
+      });
+    }
+    
+    // Stats
+    if (path === '/stats') {
+      const results = Array.from(verifications.values());
+      const genuine = results.filter(v => v.verdict === 'genuine').length;
+      const suspicious = results.filter(v => v.verdict === 'suspicious').length;
+      const fake = results.filter(v => v.verdict === 'likely_fake').length;
+      
+      return jsonResponse({
+        totalVerifications: results.length,
+        verdicts: { genuine, suspicious, likely_fake: fake },
+        averageScore: results.length > 0 
+          ? Math.round(results.reduce((sum, v) => sum + v.overallScore, 0) / results.length)
+          : 0,
       });
     }
     
@@ -80,7 +102,7 @@ const server = Bun.serve({
         console.log(`   Type: ${challengeType}`);
         
         // Dispatch to all agents
-        const dispatchResult = await dispatchChallenge(body.agents, challenge);
+        const dispatchResult = await dispatchChallenge(body.agents, challenge, timeoutMs);
         
         // Analyze results
         const verification = analyzeSwarm(body.agents, challenge, dispatchResult.responses);
@@ -91,6 +113,13 @@ const server = Bun.serve({
         // Print summary
         printVerificationSummary(verification);
         
+        // Upload evidence and attest (if genuine)
+        let attestation = null;
+        if (verification.verdict === 'genuine') {
+          const evidenceUri = await uploadEvidence(verification);
+          attestation = await attestSwarm(verification, evidenceUri);
+        }
+        
         return jsonResponse({
           verificationId: verification.id,
           overallScore: verification.overallScore,
@@ -99,8 +128,10 @@ const server = Bun.serve({
             challenged: body.agents.length,
             responded: dispatchResult.respondedCount,
             avgLatencyMs: Math.round(dispatchResult.avgLatencyMs),
+            timingStats: dispatchResult.timingStats,
             scores: verification.scores,
           },
+          attestation,
         });
         
       } catch (error) {
@@ -129,7 +160,10 @@ const server = Bun.serve({
 console.log(`🦞 Proof of Swarm Verifier`);
 console.log(`==========================`);
 console.log(`Listening on http://localhost:${PORT}`);
+console.log(`Operator: PrivateClawn (pvtclawn.base.eth)`);
+console.log(`Protocol: SVP v0.1`);
 console.log(`\nEndpoints:`);
 console.log(`  GET  /health        - Health check`);
+console.log(`  GET  /stats         - Service statistics`);
 console.log(`  POST /verify        - Submit swarm for verification`);
 console.log(`  GET  /result/:id    - Get verification result`);

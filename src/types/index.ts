@@ -24,6 +24,7 @@ export interface ChallengeResponse {
   response: string;
   receivedAt: number; // Unix timestamp ms
   latencyMs: number;
+  selfReportedMs?: number; // Agent's self-reported processing time
   error?: string;
 }
 
