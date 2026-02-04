@@ -2,6 +2,7 @@
  * Swarm Analyzer
  * 
  * Analyzes responses to detect genuine AI swarms vs human farming.
+ * Based on the insight: "prove non-human scalability" not "prove you're not human"
  */
 
 import type { ChallengeResponse, SwarmVerification, Agent, Challenge } from '../types';
@@ -9,6 +10,7 @@ import type { ChallengeResponse, SwarmVerification, Agent, Challenge } from '../
 interface AnalysisScores {
   responseTime: number;
   timeVariance: number;
+  tailBehavior: number;  // NEW: Analyze outliers
   consistency: number;
   participation: number;
 }
@@ -31,7 +33,7 @@ function scoreResponseTime(responses: ChallengeResponse[]): number {
 }
 
 /**
- * Score time variance
+ * Score time variance (CV-based)
  * Low variance = coordinated AI (high score)
  * High variance = human coordination (low score)
  */
@@ -54,6 +56,53 @@ function scoreTimeVariance(responses: ChallengeResponse[]): number {
   if (cv < 0.5) return 60 + (0.5 - cv) * 100;
   if (cv < 1.0) return 30 + (1.0 - cv) * 60;
   return Math.max(0, 30 - (cv - 1.0) * 30);
+}
+
+/**
+ * Score tail behavior (NEW)
+ * Humans coordinating scripts show jitter, retries, and cascades
+ * AI agents show tight distribution with few outliers
+ * 
+ * Based on feedback: "look at tail behavior, not just mean"
+ */
+function scoreTailBehavior(responses: ChallengeResponse[]): number {
+  const successful = responses.filter(r => !r.error);
+  if (successful.length < 3) return 50; // Not enough data
+  
+  const latencies = successful.map(r => r.latencyMs).sort((a, b) => a - b);
+  const n = latencies.length;
+  
+  // Calculate percentiles
+  const p50 = latencies[Math.floor(n * 0.5)];
+  const p90 = latencies[Math.floor(n * 0.9)];
+  const p99 = latencies[Math.floor(n * 0.99)] || latencies[n - 1];
+  const min = latencies[0];
+  const max = latencies[n - 1];
+  
+  // Tail ratio: how much does p90 differ from p50?
+  // AI: p90/p50 should be close to 1 (tight distribution)
+  // Humans: p90/p50 tends to be high (stragglers, retries)
+  const tailRatio = p50 > 0 ? p90 / p50 : 2;
+  
+  // Spread ratio: max-min / median
+  const spreadRatio = p50 > 0 ? (max - min) / p50 : 2;
+  
+  // Score based on tail ratio
+  let tailScore: number;
+  if (tailRatio < 1.2) tailScore = 100;  // Very tight
+  else if (tailRatio < 1.5) tailScore = 80;
+  else if (tailRatio < 2.0) tailScore = 60;
+  else if (tailRatio < 3.0) tailScore = 40;
+  else tailScore = 20;
+  
+  // Score based on spread
+  let spreadScore: number;
+  if (spreadRatio < 0.5) spreadScore = 100;
+  else if (spreadRatio < 1.0) spreadScore = 80;
+  else if (spreadRatio < 2.0) spreadScore = 60;
+  else spreadScore = 30;
+  
+  return (tailScore * 0.6 + spreadScore * 0.4);
 }
 
 /**
@@ -132,15 +181,24 @@ export function analyzeSwarm(
   const scores: AnalysisScores = {
     responseTime: scoreResponseTime(responses),
     timeVariance: scoreTimeVariance(responses),
+    tailBehavior: scoreTailBehavior(responses),
     consistency: scoreConsistency(responses),
     participation: scoreParticipation(responses, agents.length),
   };
   
-  // Weighted average
-  const weights = { responseTime: 0.25, timeVariance: 0.25, consistency: 0.25, participation: 0.25 };
+  // Weighted average (updated weights to include tail behavior)
+  const weights = { 
+    responseTime: 0.20, 
+    timeVariance: 0.20, 
+    tailBehavior: 0.15,  // NEW
+    consistency: 0.25, 
+    participation: 0.20 
+  };
+  
   const overallScore = 
     scores.responseTime * weights.responseTime +
     scores.timeVariance * weights.timeVariance +
+    scores.tailBehavior * weights.tailBehavior +
     scores.consistency * weights.consistency +
     scores.participation * weights.participation;
   
@@ -168,6 +226,7 @@ export function printVerificationSummary(verification: SwarmVerification): void 
   console.log(`\nScores:`);
   console.log(`  Response Time: ${verification.scores.responseTime.toFixed(1)}`);
   console.log(`  Time Variance: ${verification.scores.timeVariance.toFixed(1)}`);
+  console.log(`  Tail Behavior: ${(verification.scores as any).tailBehavior?.toFixed(1) ?? 'N/A'}`);
   console.log(`  Consistency:   ${verification.scores.consistency.toFixed(1)}`);
   console.log(`  Participation: ${verification.scores.participation.toFixed(1)}`);
   console.log(`\n📊 Overall Score: ${verification.overallScore}`);

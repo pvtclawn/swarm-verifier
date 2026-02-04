@@ -38,6 +38,7 @@ export interface SwarmVerification {
   scores: {
     responseTime: number;    // Fast responses = higher
     timeVariance: number;    // Low variance = higher (coordinated AI)
+    tailBehavior: number;    // Tight distribution = higher (no outliers/stragglers)
     consistency: number;     // Similar responses = higher (same model)
     participation: number;   // % responded = higher
   };
