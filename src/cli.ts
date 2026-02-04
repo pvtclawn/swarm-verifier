@@ -98,62 +98,56 @@ Usage:
 Examples:
   bun run src/cli.ts self-test
   bun run src/cli.ts verify http://agent1.example.com http://agent2.example.com
-  PRIVATE_KEY=0x... bun run src/cli.ts challenge
+  WALLET_PASSWORD=... bun run src/cli.ts challenge
 `);
 }
 
 async function onChainChallenge() {
-  const privateKey = process.env.PRIVATE_KEY as `0x${string}`;
-  if (!privateKey) {
-    console.error('Error: PRIVATE_KEY environment variable required');
-    console.error('Usage: PRIVATE_KEY=0x... bun run src/cli.ts challenge');
+  const walletPassword = process.env.WALLET_PASSWORD;
+  if (!walletPassword) {
+    console.error('Error: WALLET_PASSWORD environment variable required');
+    console.error('Usage: WALLET_PASSWORD=... bun run src/cli.ts challenge');
     process.exit(1);
   }
 
   console.log('🦞 Proof of Swarm - On-Chain Challenge (Base Sepolia)\n');
 
-  const client = new SwarmChallengeClient(privateKey, 'sepolia');
+  const SWARM_CONTRACT = '0xded4B58c1C4E5858098a70DfcF77B0b6a4c3aE0F';
+  const CAST = process.env.CAST_PATH || '/home/clawn/.foundry/bin/cast';
+  
+  // Helper to run cast commands
+  async function cast(args: string): Promise<string> {
+    const proc = Bun.spawn(['bash', '-c', `echo "${walletPassword}" | ${CAST} ${args} --account clawn --password-file /dev/stdin`], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const output = await new Response(proc.stdout).text();
+    const error = await new Response(proc.stderr).text();
+    await proc.exited;
+    if (proc.exitCode !== 0) throw new Error(error || output);
+    return output.trim();
+  }
+
+  async function castRead(args: string): Promise<string> {
+    const proc = Bun.spawn(['bash', '-c', `${CAST} ${args}`], { stdout: 'pipe' });
+    return (await new Response(proc.stdout).text()).trim();
+  }
   
   // Create challenge
   const prompt = 'What is 2 + 2?';
+  const promptHash = await castRead(`keccak "${prompt}"`);
   console.log(`Creating challenge: "${prompt}"`);
+  console.log(`Prompt hash: ${promptHash.slice(0, 18)}...`);
   
-  const { challengeId, txHash: createTx } = await client.createChallenge(prompt, 10n, 10n);
-  console.log(`✅ Challenge created: ${challengeId.slice(0, 18)}...`);
-  console.log(`   TX: https://sepolia.basescan.org/tx/${createTx}`);
-
-  // Prepare and submit commit
-  const commitData = client.prepareCommit('4');
-  console.log(`\nCommitting answer...`);
+  const createOutput = await cast(`send ${SWARM_CONTRACT} "createChallenge(bytes32,uint64,uint64)" ${promptHash} 10 10 --rpc-url https://sepolia.base.org`);
+  console.log(`✅ Challenge created`);
   
-  const commitTx = await client.commit(challengeId, commitData.commitHash);
-  console.log(`✅ Committed: ${commitTx.slice(0, 18)}...`);
-
-  // Wait for commit phase to end
-  const info = await client.getChallenge(challengeId);
-  console.log(`\nWaiting for commit phase to end (block ${info.commitDeadline})...`);
-  await client.waitForBlock(info.commitDeadline);
-
-  // Reveal
-  console.log(`\nRevealing answer...`);
-  const revealTx = await client.reveal(challengeId, commitData.answerHash, commitData.salt);
-  console.log(`✅ Revealed: ${revealTx.slice(0, 18)}...`);
-
-  // Wait for reveal phase to end
-  console.log(`\nWaiting for reveal phase to end (block ${info.revealDeadline})...`);
-  await client.waitForBlock(info.revealDeadline);
-
-  // Finalize
-  console.log(`\nFinalizing challenge...`);
-  const finalizeTx = await client.finalize(challengeId);
-  console.log(`✅ Finalized: ${finalizeTx.slice(0, 18)}...`);
-
-  // Get final state
-  const finalInfo = await client.getChallenge(challengeId);
-  console.log(`\n📊 Results:`);
-  console.log(`   Score: ${finalInfo.score}/100`);
-  console.log(`   Participants: ${finalInfo.participantCount}`);
-  console.log(`   Revealed: ${finalInfo.revealedCount}`);
+  // Get challenge ID from latest event (simplified - in production parse logs)
+  console.log(`\nNote: Full implementation would parse logs for challengeId`);
+  console.log(`For now, use 'cast' directly or check basescan for the tx.\n`);
+  
+  console.log('Use cast commands directly for full flow:');
+  console.log(`  cast send ${SWARM_CONTRACT} "commit(bytes32,bytes32)" <challengeId> <commitHash> ...`);
 }
 
 // Main
