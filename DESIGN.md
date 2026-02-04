@@ -28,7 +28,25 @@ Humans (even using AI) show:
 - Irregular patterns
 - Correlation with time-of-day (fatigue)
 
-### 2. Response Latency Distribution
+### 2. Tail Behavior Analysis (NEW)
+
+For a swarm of N agents responding:
+
+**Metrics:**
+- **P90/P50 ratio**: How much slower is the 90th percentile vs median?
+- **Spread ratio**: (max - min) / median
+
+**Genuine AI Swarm:**
+- P90/P50 < 1.5 (tight distribution)
+- Spread ratio < 1.0
+- Few outliers
+
+**Human Farming:**
+- P90/P50 > 2.0 (stragglers, retries)
+- Spread ratio > 2.0 (jitter)
+- Cascading delays visible
+
+### 3. Response Latency Distribution
 
 For a swarm of N agents responding to same challenge:
 
