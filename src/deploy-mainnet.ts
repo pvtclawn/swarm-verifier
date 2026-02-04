@@ -12,7 +12,11 @@ const FOUNDRY_PATH = join(process.env.HOME!, '.foundry/bin');
 
 // Load wallet - use spawn to avoid shell escaping issues
 function getPrivateKey(): Hex {
-  const secretsPath = `${process.env.HOME}/.openclaw/workspace/.vault/secrets.json`;
+  const secretsPath = process.env.VAULT_PATH;
+  if (!secretsPath) {
+    throw new Error('VAULT_PATH environment variable not set');
+  }
+  
   const secrets = JSON.parse(readFileSync(secretsPath, 'utf-8'));
   const password = secrets.WALLET_PASSWORD;
   
